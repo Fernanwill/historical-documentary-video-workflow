@@ -127,11 +127,53 @@ droppable.options.drop.call(droppable, {}, {
 });
 ```
 
-### 5.3 Escala Temporal del Timeline
-- Factor de escala: **~20 píxeles por segundo** (a zoom predeterminado).
-- **10 segundos de video:** ~201 px.
-- **60 segundos de video/audio:** ~1210 - 1218 px.
-- **5 minutos (300 segundos):** ~6000 px.
+### 5.3 Escala Temporal y Unidades del Timeline
+- Factor de escala interno: **`zoom = 0.02`** (equivale a 20 px/s o 0.02 px/ms).
+- Unidades de modelo (`BrickItem`): `left` y `duration` están en **milisegundos**.
+- Offset en píxeles para eventos de drop: `offsetPx = Math.floor(targetTimeMs * zoom)`.
+- **10 segundos de video:** 10,041 ms (~201 px).
+- **60 segundos:** 60,000 ms (1,200 px).
+- **5 minutos (Parte 1):** ~304,535 ms (6,091 px).
+
+### 5.4 Arquitectura Interna Nativa (Backbone.js / Marionette.js)
+El editor expone la instancia global `window.app` con acceso directo a colecciones y eventos sin depender de emulación física de UI:
+- **Pistas del Timeline:** `window.app.timelineModule.trackItemsCollection`
+  - Pista 0 (Video): `window.app.timelineModule.trackItemsCollection.at(0)`
+  - Pista 1 (Audio): `window.app.timelineModule.trackItemsCollection.at(1)`
+- **Elementos en Timeline (Bricks):** `window.app.timelineModule.brickItemsCollection`
+- **Inserción Directa de Medios:**
+  ```javascript
+  const trackModel = window.app.timelineModule.trackItemsCollection.at(0); // Video
+  const mediaData = await window.$.ajax({ url: '/library/get_media_item/' + mediaId, type: 'GET' });
+  const itemModel = new window.app.mediaItemsModule.Item(mediaData);
+  const offsetPx = Math.floor(targetTimeMs * window.app.project.get("zoom"));
+  window.app.vent.trigger("onMediaTimelineDropped", trackModel, itemModel, offsetPx);
+  ```
+- **Exportación Directa a Cola de Render (FullHD mp4):**
+  ```javascript
+  const n = window.$("#formExportProject").serializeObject() || {
+    name: "Nombre_Proyecto",
+    quality: "high",
+    size: "1080",
+    format: "mp4"
+  };
+  n.aspect = window.app.project.get("aspect") || "16:9";
+  n.project_id = window.app.project.get("id");
+  n.project_title = window.app.project.get("title");
+  
+  const payload = {
+    options: n,
+    data: window.app.getProjectData().data
+  };
+  
+  window.$.ajax({
+    type: "POST",
+    url: window.app.options.baseUrl + "render_project/" + (n.project_id || "tmp"),
+    dataType: "json",
+    contentType: "application/json",
+    data: JSON.stringify(payload)
+  });
+  ```
 
 ---
 
@@ -144,10 +186,11 @@ Cuando la locución no se genera con el TTS integrado de VideoExpress sino con u
    - Se genera el archivo de audio en CloneVoice AI (`.mp3` o `.wav` a 320 kbps / 48 kHz).
 2. **Subida a VideoExpress:**
    - El usuario o agente abre `Import Media / Text to Speech` -> Clic en tarjeta `Upload Media`.
-   - Se sube el archivo de audio, el cual se aloja automáticamente en `My Media -> Audio`.
+   - Se sube el archivo de audio, el cual se aloja automáticamente en `My Media -> Audio` (ID `72280`).
 3. **Ensamblaje Automatizado por el Agente:**
-   - El agente detecta el nuevo audio en la carpeta `Audio` (o `Uploads`).
-   - Lo suelta en la **Pista 2 (`#track32`)** en la posición `0px`.
-   - Lee la duración exacta del audio en píxeles.
-   - Genera y coloca secuencialmente los clips de B-roll en la **Pista 1 (`#track30`)** sincronizados con los cortes de la historia.
-   - Guarda el proyecto (`.button-save-project-as`) y ejecuta la exportación en FullHD.
+   - El agente detecta los audios en la carpeta `Audio` (ID `72280`).
+   - Los inserta ordenadamente en la **Pista de Audio (`trackItemsCollection.at(1)`)**.
+   - Genera los clips visuales de B-roll (10s Multi-Shot Cinematic Netflix, Silent/Video Only) en VideoExpress.
+   - Ensambla y ajusta la duración de los clips en la **Pista de Video (`trackItemsCollection.at(0)`)** sincronizados con los cortes de la historia.
+   - Guarda el proyecto (`Rockefeller_Parte_1_5min`) y lanza la exportación FullHD en la cola de renderizado.
+
